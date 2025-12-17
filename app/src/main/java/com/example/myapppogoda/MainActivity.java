@@ -1,8 +1,8 @@
 package com.example.myapppogoda;
 
-import android.os.AsyncTask;
 import android.os.Bundle;
-import android.view.View;
+import android.os.Handler;
+import android.os.Looper;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
@@ -21,8 +21,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
 import java.net.URL;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -30,12 +31,15 @@ public class MainActivity extends AppCompatActivity {
     private Button main_btn;
     private TextView result_info;
 
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final Handler handler = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_main);
+
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
@@ -46,80 +50,95 @@ public class MainActivity extends AppCompatActivity {
         main_btn = findViewById(R.id.main_btn);
         result_info = findViewById(R.id.result_info);
 
-        main_btn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                String city = user_field.getText().toString();
-                String apiKey = "3d6d2ffdbf543bf5bc21fd59ee42cfd4";
-                String url = "https://api.openweathermap.org/data/2.5/weather?q=" + city + "&appid=" + apiKey + "&lang=pl&units=metric";
-                if (city.isEmpty()) {
-                    Toast.makeText(MainActivity.this, "@string/user_no_input", Toast.LENGTH_SHORT).show();
-                } else {
-                    new GetUrlData().execute(url);
-                }
+        main_btn.setOnClickListener(view -> {
+            String city = user_field.getText().toString().trim();
+            if (city.isEmpty()) {
+                Toast.makeText(MainActivity.this, R.string.user_no_input, Toast.LENGTH_SHORT).show();
+                return;
             }
 
+            String apiKey = "3d6d2ffdbf543bf5bc21fd59ee42cfd4";
+            String url = "https://api.openweathermap.org/data/2.5/weather?q=" + city +
+                    "&appid=" + apiKey + "&lang=pl&units=metric";
+
+            fetchWeather(url);
         });
     }
 
-    private class GetUrlData extends AsyncTask<String, String, String> {
+    private void fetchWeather(String urlString) {
+        result_info.setText("Downloading...");
 
-        protected void onPreExecute() {
-            super.onPreExecute();
-            result_info.setText("Downloading...");
-        }
+        executor.execute(() -> {
+            String response = null;
 
-        @Override
-        protected String doInBackground(String... strings) {
             HttpURLConnection connection = null;
-            BufferedReader bufferedReader = null;
+            BufferedReader reader = null;
+
             try {
-                URL url = new URL(strings[0]);
+                URL url = new URL(urlString);
                 connection = (HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
                 connection.connect();
 
-                InputStream inputStream = connection.getInputStream();
-                bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
-                StringBuffer result = new StringBuffer();
-                String line = "";
-                while ((line = bufferedReader.readLine()) != null) {
-                    result.append(line).append("\n");
-                }
-                return result.toString();
+                int responseCode = connection.getResponseCode();
+                InputStream inputStream = (responseCode == HttpURLConnection.HTTP_OK) ?
+                        connection.getInputStream() : connection.getErrorStream();
 
-            } catch (MalformedURLException e) {
-                e.printStackTrace();
+                reader = new BufferedReader(new InputStreamReader(inputStream));
+                StringBuilder result = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    result.append(line);
+                }
+                response = result.toString();
+
             } catch (IOException e) {
                 e.printStackTrace();
             } finally {
-                if (connection != null)
-                    connection.disconnect();
+                if (connection != null) connection.disconnect();
                 try {
-                    if (bufferedReader != null)
-                        bufferedReader.close();
+                    if (reader != null) reader.close();
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
-
-            }
-            return null;
-        }
-
-        @Override
-        protected void onPostExecute(String s) {
-            super.onPostExecute(s);
-
-
-            try {
-                JSONObject jsonObject = new JSONObject(s);
-                String temp = jsonObject.getJSONObject("main").getString("temp");
-                String desc = jsonObject.getJSONArray("weather").getJSONObject(0).getString("description");
-                result_info.setText("Temperatura: " + temp + " °C \n" + desc + " ");
-            } catch (Exception e) {
-                e.printStackTrace();
             }
 
+            String finalResponse = response;
+            handler.post(() -> updateUI(finalResponse));
+        });
+    }
 
+    private void updateUI(String response) {
+        if (response == null) {
+            result_info.setText("Błąd pobierania danych.");
+            return;
         }
+
+        try {
+            JSONObject jsonObject = new JSONObject(response);
+
+            // Проверка на ошибки API
+            if (jsonObject.has("cod") && jsonObject.getInt("cod") != 200) {
+                String message = jsonObject.has("message") ? jsonObject.getString("message") : "Nieznany błąd";
+                result_info.setText("Błąd: " + message);
+                return;
+            }
+
+            String temp = jsonObject.getJSONObject("main").getString("temp");
+            String desc = jsonObject.getJSONArray("weather").getJSONObject(0).getString("description");
+
+            result_info.setText("Temperatura: " + temp + " °C\n" + desc);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            result_info.setText("Błąd parsowania danych.");
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        executor.shutdownNow(); // закрываем executor при уничтожении Activity
     }
 }
