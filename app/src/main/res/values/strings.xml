@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">MyAppPogoda</string>
+    <string name="app_logo" translatable="false">Pogoda twojego miasta</string>
+    <string name="hint_user_field" translatable="false">Wprowadż miasto</string>
+    <string name="main_btn" translatable="false">Pogoda</string>
+    <string name="user_no_input" translatable="false">Wprowadź miasto</string>
+</resources>
